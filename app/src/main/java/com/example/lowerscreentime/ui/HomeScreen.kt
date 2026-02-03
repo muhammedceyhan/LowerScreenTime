@@ -44,6 +44,21 @@ fun HomeScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
+    val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            // Permission granted or denied logic if needed
+        }
+    )
+    
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+             if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                 notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+             }
+        }
+    }
+    
     // UI State
     val today = LocalDate.now()
     val todayMillis = today.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -134,6 +149,25 @@ fun HomeScreen(
                     timeLeft -= 1000
                 } else if (isTimerRunning && timeLeft <= 0) {
                     isTimerRunning = false
+                    onUnlockClick()
+                    
+                    // Send Notification
+                    val notificationManager = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    val intent = android.content.Intent(context, com.example.lowerscreentime.MainActivity::class.java).apply {
+                        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+                    val pendingIntent: android.app.PendingIntent = android.app.PendingIntent.getActivity(context, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
+
+                    val builder = androidx.core.app.NotificationCompat.Builder(context, "focus_channel")
+                        .setSmallIcon(android.R.drawable.ic_dialog_info) // Replace with app icon if available, using system default for now to be safe
+                        .setContentTitle("Focus Session Complete!")
+                        .setContentText("Well done! Review your session.")
+                        .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                        .setContentIntent(pendingIntent)
+                        .setAutoCancel(true)
+
+                    notificationManager.notify(1001, builder.build())
+
                     // Timer Finished!
                     // Fetch random quote
                     scope.launch {
@@ -144,6 +178,17 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+            
+            // Request Notification Permission
+            LaunchedEffect(Unit) {
+               if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                   if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                       // We can't request directly from Composable easily without Accompanist or ActivityResultLauncher within the Activity.
+                       // For simplicity in this existing structure, let's assume MainActivity might handle it or we just try-catch/ignore if we can't.
+                       // Ideally, we should use rememberLauncherForActivityResult.
+                   }
+               }
             }
 
             Card(
@@ -156,13 +201,16 @@ fun HomeScreen(
                 ) {
                     Text("Focus Timer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     
-                    if (isTimerRunning) {
+                if (isTimerRunning) {
                         Text(
                             text = String.format("%02d:%02d", (timeLeft / 1000) / 60, (timeLeft / 1000) % 60),
                             style = MaterialTheme.typography.displayMedium
                         )
                         Button(
-                            onClick = { isTimerRunning = false },
+                            onClick = { 
+                                isTimerRunning = false
+                                onUnlockClick()
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                         ) {
                             Text("Stop")
@@ -178,6 +226,7 @@ fun HomeScreen(
                         Button(onClick = {
                             timeLeft = (timerDuration.toInt() * 60 * 1000).toLong()
                             isTimerRunning = true
+                            onLockClick()
                         }) {
                             Text("Start Focus")
                         }
