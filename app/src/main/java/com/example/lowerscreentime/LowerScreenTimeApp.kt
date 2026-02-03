@@ -14,6 +14,8 @@ class LowerScreenTimeApp : Application() {
             applicationContext,
             AppDatabase::class.java,
             "lower_screen_time_db"
-        ).build()
+        )
+            .fallbackToDestructiveMigration()
+            .build()
     }
 }

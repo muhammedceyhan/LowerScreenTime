@@ -21,9 +21,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.lowerscreentime.data.Habit
+import com.example.lowerscreentime.data.HabitCompletion
 import com.example.lowerscreentime.data.HabitDao
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -33,6 +35,8 @@ import java.time.format.DateTimeFormatter
 fun HomeScreen(
     navController: NavController,
     habitDao: HabitDao,
+    quoteDao: com.example.lowerscreentime.data.QuoteDao,
+    quoteCommentDao: com.example.lowerscreentime.data.QuoteCommentDao,
     onLockClick: () -> Unit,
     onUnlockClick: () -> Unit,
     isLocked: Boolean
@@ -43,7 +47,6 @@ fun HomeScreen(
     // UI State
     val today = LocalDate.now()
     val todayMillis = today.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-    
     val habits by habitDao.getAllHabits().collectAsState(initial = emptyList())
     
     // Track completion state map: habitId -> isCompleted
@@ -59,6 +62,8 @@ fun HomeScreen(
             }
         }
     }
+
+    var showCalendarForHabit by remember { mutableStateOf<Habit?>(null) }
 
     Scaffold(
         topBar = {
@@ -95,17 +100,17 @@ fun HomeScreen(
                 ) {
                     Icon(
                         imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
-                        contentDescription = "Lock State",
+                        contentDescription = if (isLocked) "Locked" else "Unlocked",
                         modifier = Modifier.size(48.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                     Button(
-                        onClick = { if (isLocked) onUnlockClick() else onLockClick() },
+                        onClick = if (isLocked) onUnlockClick else onLockClick,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isLocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text(if (isLocked) "UNLOCK" else "LOCK MODE")
+                        Text(if (isLocked) "Unlock (Emergency)" else "Lock Phone")
                     }
                     if (isLocked) {
                         Text("DND Active", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top=4.dp))
@@ -115,6 +120,121 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // FOCUS TIMER
+            var timerDuration by remember { mutableStateOf(25f) }
+            var timeLeft by remember { mutableStateOf(0L) }
+            var isTimerRunning by remember { mutableStateOf(false) }
+            var showCompletionDialog by remember { mutableStateOf(false) }
+            var randomQuote by remember { mutableStateOf<com.example.lowerscreentime.data.Quote?>(null) }
+            
+            // Effect to handle timer countdown
+            LaunchedEffect(isTimerRunning, timeLeft) {
+                if (isTimerRunning && timeLeft > 0) {
+                    kotlinx.coroutines.delay(1000L)
+                    timeLeft -= 1000
+                } else if (isTimerRunning && timeLeft <= 0) {
+                    isTimerRunning = false
+                    // Timer Finished!
+                    // Fetch random quote
+                    scope.launch {
+                        val allQuotes = quoteDao.getAll().first()
+                        if (allQuotes.isNotEmpty()) {
+                            randomQuote = allQuotes.random()
+                            showCompletionDialog = true
+                        }
+                    }
+                }
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Focus Timer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    
+                    if (isTimerRunning) {
+                        Text(
+                            text = String.format("%02d:%02d", (timeLeft / 1000) / 60, (timeLeft / 1000) % 60),
+                            style = MaterialTheme.typography.displayMedium
+                        )
+                        Button(
+                            onClick = { isTimerRunning = false },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Stop")
+                        }
+                    } else {
+                        Text("${timerDuration.toInt()} minutes")
+                        Slider(
+                            value = timerDuration,
+                            onValueChange = { timerDuration = it },
+                            valueRange = 1f..120f,
+                            steps = 119
+                        )
+                        Button(onClick = {
+                            timeLeft = (timerDuration.toInt() * 60 * 1000).toLong()
+                            isTimerRunning = true
+                        }) {
+                            Text("Start Focus")
+                        }
+                    }
+                }
+            }
+            
+            // Completion Dialog
+            if (showCompletionDialog && randomQuote != null) {
+                var commentText by remember { mutableStateOf("") }
+                
+                AlertDialog(
+                    onDismissRequest = { showCompletionDialog = false },
+                    title = { Text("Session Complete!") },
+                    text = {
+                        Column {
+                            Text("Well done! Here is a quote for you:")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "\"${randomQuote!!.content}\"",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            OutlinedTextField(
+                                value = commentText,
+                                onValueChange = { commentText = it },
+                                label = { Text("Reflection (Optional)") },
+                                placeholder = { Text("How was your focus?") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (commentText.isNotBlank()) {
+                                scope.launch {
+                                    quoteCommentDao.insert(
+                                        com.example.lowerscreentime.data.QuoteComment(
+                                            quoteId = randomQuote!!.id,
+                                            text = commentText
+                                        )
+                                    )
+                                    showCompletionDialog = false
+                                }
+                            } else {
+                                showCompletionDialog = false
+                            }
+                        }) {
+                            Text("Save & Close")
+                        }
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            
             // CALENDAR SUMMARY
             Text("Last 7 Days", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
@@ -123,7 +243,7 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 for (i in 6 downTo 0) {
-                    val date = today.minusDays(i.toLong())
+                    val date = LocalDate.now().minusDays(i.toLong())
                     val dayMillis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                     
                     // Logic to check if ALL habits were completed on this day would be complex to query directly efficiently in one go for all days
@@ -152,17 +272,24 @@ fun HomeScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(habits) { habit ->
+                    val isCompleted = completionState[habit.id] == true
+                    
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .background(MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium)
+                            .clickable { showCalendarForHabit = habit }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
+                        Text(habit.name, style = MaterialTheme.typography.bodyLarge)
                         Checkbox(
-                            checked = completionState[habit.id] == true,
+                            checked = isCompleted,
                             onCheckedChange = { checked ->
                                 scope.launch {
                                     if (checked) {
@@ -178,7 +305,6 @@ fun HomeScreen(
                                 }
                             }
                         )
-                        Text(habit.name, style = MaterialTheme.typography.bodyLarge)
                     }
                 }
                 if (habits.isEmpty()) {
@@ -187,6 +313,34 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+        
+        // Calendar Dialog
+        if (showCalendarForHabit != null) {
+            val habit = showCalendarForHabit!!
+            val completions by habitDao.getCompletionsForHabit(habit.id).collectAsState(initial = emptyList())
+            val completedDates = remember(completions) {
+                completions.map { 
+                    java.time.Instant.ofEpochMilli(it.date)
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDate() 
+                }.toSet()
+            }
+
+            AlertDialog(
+                onDismissRequest = { showCalendarForHabit = null },
+                title = { Text("History: ${habit.name}") },
+                text = {
+                    com.example.lowerscreentime.ui.components.CalendarView(
+                        completedDates = completedDates
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showCalendarForHabit = null }) {
+                        Text("Close")
+                    }
+                }
+            )
         }
     }
 }

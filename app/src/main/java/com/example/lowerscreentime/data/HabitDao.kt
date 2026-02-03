@@ -34,4 +34,7 @@ interface HabitDao {
     // Get count of habits to calculate percentage (if needed)
     @Query("SELECT COUNT(*) FROM habits")
     fun getHabitCount(): Flow<Int>
+
+    @Query("SELECT * FROM habit_completions WHERE habitId = :habitId")
+    fun getCompletionsForHabit(habitId: Long): Flow<List<HabitCompletion>>
 }
